@@ -98,6 +98,41 @@ morning, so it never loops.
 
 **↻ Rebuild** in the top-right corner rebuilds right away.
 
+## GitHub inbox
+
+This personal build adds a persistent GitHub section above your usual homepage.
+It follows `tmustier` by default. Change the username in Settings, or leave it
+blank to disable the section.
+
+Each rebuild fetches open issues and PRs submitted by others on your public
+repositories, including Dependabot. The agent writes a short explanation and a
+suggested next action for each item. Use the filters to see what needs you, what
+is waiting on others, or all open items. Opening an item does not remove it.
+
+GitHub limits anonymous API requests to 60 per hour, which may not cover discussion
+and checks across a busy inbox. Add a GitHub token in Settings for a higher limit.
+Public read access is enough; no write access is needed. The token stays in local
+browser storage and is sent only to GitHub. The agent receives public issue text,
+recent discussion, review summaries and check results, never the token.
+
+The section shows its last successful check time and marks new or changed items.
+On the first check, every item is newly tracked. Failed refreshes keep the old
+snapshot with a warning. Missing AI summaries remain visible for manual triage.
+The suggestions use shortened descriptions and recent discussion, not a full code
+review, and the extension never replies, merges or closes anything.
+
+For verification outside Chrome:
+
+```bash
+GITHUB_OWNER=tmustier bun harness/github-live.ts
+# Set GITHUB_TOKEN privately for authenticated public reads.
+# With ANTHROPIC_API_KEY also configured:
+GITHUB_OWNER=tmustier pnpm agent:run
+```
+
+The live reader saves public data in the ignored `harness/out/` directory. The
+agent harness checks that every incoming item has a valid summary.
+
 ## Good to know
 
 - **Cost.** Each build is a single agent session billed to your API key. What it

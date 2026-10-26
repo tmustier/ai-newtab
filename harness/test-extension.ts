@@ -15,14 +15,14 @@
  * Set CHROME_PATH if Chrome isn't at the default macOS location.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const CHROME =
   process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const EXT = join(import.meta.dir, "../apps/extension/.output/chrome-mv3");
-const PORT = 9333;
+const PORT = Number(process.env.TEST_CDP_PORT ?? 9333);
 
 if (!existsSync(join(EXT, "manifest.json"))) {
   console.error(`No build at ${EXT}. Run: pnpm build`);
@@ -182,6 +182,12 @@ try {
   const error = started.find((m) => m.kind === "error");
   check("startBuild with no API key reports an error", /API key/i.test(error?.message ?? ""), error?.message);
 
+  // A missing-key resume must keep the exact evidence paired with its session.
+  await page.evaluate(`chrome.storage.local.set({activeSessionId:"resume-fixture",githubInbox:{sessionId:"resume-fixture",inbox:{owner:"tmustier",checkedAt:"2026-10-26",items:[],warnings:[]},summaries:[]}})`);
+  await talk({ kind: "startBuild", resume: true }, 500);
+  check("missing-key resume preserves its session and GitHub evidence", await page.evaluate<boolean>(`chrome.storage.local.get(["activeSessionId","githubInbox"]).then(s=>s.activeSessionId==="resume-fixture" && s.githubInbox.sessionId==="resume-fixture")`));
+  await page.evaluate(`chrome.storage.local.remove(["activeSessionId","githubInbox"])`);
+
   // ---- 5. chrome.history is readable ---------------------------------------
   const domains = await page.evaluate<string[]>(`
     (async () => {
@@ -202,6 +208,65 @@ try {
     domains.includes("news.ycombinator.com"),
     domains.join(", "),
   );
+
+  // ---- GitHub section: real extension rendering with explicit UI fixtures ----
+  // No real API credentials are used or copied into this isolated profile.
+  const fixture = {
+    owner: "tmustier", checkedAt: new Date().toISOString(), warnings: [],
+    items: [
+      { url: "https://github.com/tmustier/codex-computer-use-mcp/pull/39", repo: "tmustier/codex-computer-use-mcp", number: 39, kind: "PR", title: "Add Windows support", author: "contributor", body: "Support the official Windows helper.", updatedAt: new Date().toISOString(), change: "updated", comments: [], pr: { draft: false, mergeable: null, checks: "passing", reviews: [] } },
+      { url: "https://github.com/tmustier/pi-for-excel/pull/772", repo: "tmustier/pi-for-excel", number: 772, kind: "PR", title: "Bump hono", author: "dependabot[bot]", body: "Update the dependency.", updatedAt: new Date().toISOString(), change: "new", comments: [], pr: { draft: false, mergeable: true, checks: "pending", reviews: [] } },
+      { url: "https://github.com/tmustier/pi-extensions/issues/115", repo: "tmustier/pi-extensions", number: 115, kind: "Issue", title: "files-widget hardcodes brew", author: "contributor", body: "The message assumes Homebrew.", updatedAt: new Date().toISOString(), change: "unchanged", comments: [] },
+    ],
+  };
+  const githubState = {
+    inbox: fixture,
+    summaries: [
+      { url: fixture.items[0].url, summary: "Adds Windows support using the official helper.", action: "Review the implementation and Windows test evidence.", bucket: "needs-you" },
+      { url: fixture.items[1].url, summary: "Updates the Hono dependency; checks are still running.", action: "Wait for CI, then review the update.", bucket: "waiting" },
+    ],
+  };
+  await page.evaluate(`chrome.storage.local.set(${JSON.stringify({ apiKey: "ui-test-not-a-real-key", autoRebuild: false, githubOwner: "tmustier", githubToken: "ui-test-token", githubInbox: githubState, homepageData: { code: "import React from 'react'; export default function PersonalizedHomepage(){return <main style={{padding:40,fontFamily:'system-ui'}}><h1>Existing homepage preserved</h1><p>Your usual reading stays below the GitHub inbox.</p></main>}", timestamp: new Date().toISOString() } })})`);
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await page.send("Page.reload");
+  await sleep(3500);
+  const inboxText = await page.evaluate<string>("document.body.innerText");
+  check("GitHub section renders alongside the existing homepage iframe", inboxText.includes("GitHub inbox") && await page.evaluate<boolean>("Boolean(document.querySelector('iframe'))"));
+  check("summary and next action are visible", inboxText.includes("Adds Windows support") && inboxText.includes("Review the implementation"));
+  check("unsummarised items remain visible for manual triage", inboxText.includes("AI summary unavailable"));
+  check("GitHub links are canonical external links", await page.evaluate<boolean>("document.querySelector('.github-item h3 a').href === 'https://github.com/tmustier/codex-computer-use-mcp/pull/39'"));
+
+  const out = join(import.meta.dir, "out");
+  mkdirSync(out, { recursive: true });
+  const shot = async (name: string, clip?: object) => {
+    const r = await page.send("Page.captureScreenshot", { format: "png", ...(clip ? { clip } : {}) });
+    if (!r.result?.data) throw new Error("Screenshot failed");
+    writeFileSync(join(out, name), Buffer.from(r.result.data, "base64"));
+  };
+  check("build error does not cover the GitHub header", await page.evaluate<boolean>(`(() => {const banner=document.querySelector('[title="Dismiss"]').parentElement;return document.querySelector('.github-section').getBoundingClientRect().top >= banner.getBoundingClientRect().bottom})()`));
+  await page.evaluate(`document.querySelector('[title="Dismiss"]').click()`);
+  await shot("github-desktop.png");
+  const box = await page.evaluate<object>("(() => {const r=document.querySelector('.github-section').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1}})()");
+  await shot("github-section.png", box);
+  await page.evaluate("Array.from(document.querySelectorAll('.github-groups button')).find(b=>b.textContent.includes('Waiting on others')).click()");
+  check("waiting filter includes Dependabot", (await page.evaluate<string>("document.querySelector('.github-items').innerText")).includes("dependabot[bot]"));
+  await page.evaluate("Array.from(document.querySelectorAll('.github-groups button')).find(b=>b.textContent.includes('All open')).click()");
+  check("All open keeps every unresolved item", await page.evaluate<number>("document.querySelectorAll('.github-item').length") === 3);
+
+  await page.evaluate(`chrome.storage.local.set({githubInbox:${JSON.stringify({ ...githubState, error: "GitHub returned 403: rate limited." })}})`);
+  await sleep(250);
+  check("failed refresh displays stale warning without discarding items", (await page.evaluate<string>("document.body.innerText")).includes("Showing the last successful snapshot") && await page.evaluate<number>("document.querySelectorAll('.github-item').length") === 3);
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false });
+  await shot("github-laptop.png");
+  check("no horizontal overflow at 1024px", await page.evaluate<boolean>("document.documentElement.scrollWidth <= innerWidth"));
+  const context = await page.evaluate<object>(`({font:getComputedStyle(document.querySelector('.github-section')).fontFamily,brokenImages:Array.from(document.images).filter(i=>!i.naturalWidth).length,hasFocusRule:Array.from(document.styleSheets).some(s=>{try{return Array.from(s.cssRules).some(r=>(r.selectorText||'').includes(':focus-visible'))}catch{return false}})})`);
+  console.log("Visual context:", JSON.stringify(context));
+  await page.evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.title==='Customize homepage').click()");
+  check("settings offers username and password-masked token", await page.evaluate<boolean>("document.querySelector('input[aria-label=\"GitHub username\"]').value === 'tmustier' && document.querySelector('input[aria-label=\"GitHub token (optional)\"]').type === 'password'"));
+  await shot("github-settings.png");
+  await page.evaluate(`chrome.storage.local.set({githubOwner:""})`);
+  await sleep(200);
+  check("account changes in storage hide the section and update open settings", await page.evaluate<boolean>(`!document.querySelector('.github-section') && document.querySelector('input[aria-label="GitHub username"]').value === ""`));
 
   page.close();
   browser.close();

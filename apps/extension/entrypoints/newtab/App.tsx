@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_MODEL, DEFAULT_BLOCKED_SITES, type HomepageModel } from "@homepage/agent-core";
+import { DEFAULT_MODEL, DEFAULT_BLOCKED_SITES, type HomepageModel, type GitHubInboxState } from "@homepage/agent-core";
 import { BUILD_STEPS } from "@/lib/protocol";
 import { KEYS, extensionStore, loadHomepage, loadSettings, saveSetting } from "@/lib/storage";
 import { toRenderable } from "@/lib/transpile";
 import { ApiKeySetup } from "./components/ApiKeySetup";
 import { BuildProgress } from "./components/BuildProgress";
+import { GitHubSection } from "./components/GitHubSection";
 import { HomepagePreview } from "./components/HomepagePreview";
 import { SettingsModal } from "./components/SettingsModal";
 import { btn, errorBox } from "./components/ui";
@@ -17,6 +18,21 @@ export default function App() {
   const [blockedSites, setBlockedSites] = useState<string[]>(DEFAULT_BLOCKED_SITES);
   const [model, setModel] = useState<HomepageModel>(DEFAULT_MODEL);
   const [autoRebuild, setAutoRebuild] = useState(true);
+  const [githubOwner, setGithubOwner] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+  const [githubData, setGithubData] = useState<GitHubInboxState>();
+
+  useEffect(() => {
+    const update = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area !== "local") return;
+      if (changes[KEYS.githubInbox]) setGithubData(changes[KEYS.githubInbox].newValue as GitHubInboxState | undefined);
+      if (changes[KEYS.githubOwner]) setGithubOwner((changes[KEYS.githubOwner].newValue as string | undefined) ?? "tmustier");
+      if (changes[KEYS.githubToken]) setGithubToken((changes[KEYS.githubToken].newValue as string | undefined) ?? "");
+    };
+    browser.storage.onChanged.addListener(update);
+    void extensionStore.get<GitHubInboxState>(KEYS.githubInbox).then(setGithubData);
+    return () => browser.storage.onChanged.removeListener(update);
+  }, []);
   /** Transpiled homepage, ready for Sandpack. */
   const [renderedCode, setRenderedCode] = useState<string | null>(null);
   /** A session left mid-flight, offered as "Resume interrupted build". */
@@ -45,6 +61,8 @@ export default function App() {
           extensionStore.get<string>(KEYS.activeSessionId),
         ]);
         setApiKey(settings.apiKey);
+        setGithubOwner(settings.githubOwner);
+        setGithubToken(settings.githubToken);
         setSystemPrompt(settings.systemPrompt);
         setBlockedSites(settings.blockedSites);
         setModel(settings.model);
@@ -63,12 +81,13 @@ export default function App() {
   }, []);
 
   const savePrompt = useCallback(
-    async (prompt: string, sites: string[]) => {
-      await Promise.all([saveSetting("systemPrompt", prompt), saveSetting("blockedSites", sites)]);
+    async (prompt: string, sites: string[], owner: string, token: string) => {
+      await Promise.all([saveSetting("systemPrompt", prompt), saveSetting("blockedSites", sites), saveSetting("githubOwner", owner), saveSetting("githubToken", token)]);
+      setGithubOwner(owner);
+      setGithubToken(token);
       setBlockedSites(sites);
       setSystemPrompt(prompt);
       setShowSettings(false);
-      setRenderedCode(null);
       build();
     },
     [build],
@@ -83,6 +102,21 @@ export default function App() {
     setAutoRebuild(next);
     await saveSetting("autoRebuild", next);
   }, []);
+
+  const settingsDialog = showSettings && (
+    <SettingsModal
+      initialPrompt={systemPrompt}
+      githubOwner={githubOwner}
+      githubToken={githubToken}
+      blockedSites={blockedSites}
+      model={model}
+      onChangeModel={changeModel}
+      autoRebuild={autoRebuild}
+      onToggleAutoRebuild={toggleAutoRebuild}
+      onClose={() => setShowSettings(false)}
+      onSave={savePrompt}
+    />
+  );
 
   if (loading) return <div style={{ padding: 20, textAlign: "center" }}>Loading…</div>;
   if (!apiKey) return <ApiKeySetup onSave={saveKey} />;
@@ -100,6 +134,7 @@ export default function App() {
 
   if (!renderedCode) {
     return (
+      <>
       <div style={{ maxWidth: 560, margin: "14vh auto", padding: 24, fontFamily: "system-ui" }}>
         <h1 style={{ fontSize: 26 }}>Build your homepage</h1>
         <p style={{ color: "#555", lineHeight: 1.6 }}>
@@ -113,6 +148,7 @@ export default function App() {
           <button style={btn} onClick={() => build()}>
             Build today&apos;s homepage
           </button>
+          <button style={btn} onClick={() => setShowSettings(true)}>Settings</button>
           {resumable && (
             <button style={{ ...btn, backgroundColor: "#555" }} onClick={() => build({ resume: true })}>
               Resume interrupted build
@@ -120,6 +156,9 @@ export default function App() {
           )}
         </div>
       </div>
+      <GitHubSection owner={githubOwner} data={githubData} />
+      {settingsDialog}
+      </>
     );
   }
 
@@ -161,11 +200,7 @@ export default function App() {
         <div
           style={{
             ...errorBox,
-            position: "fixed",
-            top: 20,
-            left: 20,
-            right: 260,
-            zIndex: 999,
+            margin: "80px 20px 20px",
             padding: "10px 14px",
             borderRadius: 6,
             display: "flex",
@@ -196,20 +231,10 @@ export default function App() {
         </div>
       )}
 
+      <GitHubSection owner={githubOwner} data={githubData} />
       <HomepagePreview code={renderedCode} />
 
-      {showSettings && (
-        <SettingsModal
-          initialPrompt={systemPrompt}
-          blockedSites={blockedSites}
-          model={model}
-          onChangeModel={changeModel}
-          autoRebuild={autoRebuild}
-          onToggleAutoRebuild={toggleAutoRebuild}
-          onClose={() => setShowSettings(false)}
-          onSave={savePrompt}
-        />
-      )}
+      {settingsDialog}
     </div>
   );
 }

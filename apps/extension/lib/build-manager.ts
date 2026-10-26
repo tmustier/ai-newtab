@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { runHomepageBuild, type RunPhase } from "@homepage/agent-core";
+import { fetchGitHubInbox, reconcileGitHubInbox, runHomepageBuild, type GitHubInbox, type GitHubInboxState, type RunPhase } from "@homepage/agent-core";
 import { shouldAutoRebuild } from "./auto-rebuild";
 import { browserBridge } from "./browser-bridge";
 import {
@@ -147,7 +147,7 @@ export class BuildManager {
     this.controller = new AbortController();
 
     try {
-      const { apiKey, systemPrompt, model } = await loadSettings();
+      const { apiKey, systemPrompt, model, githubOwner, githubToken } = await loadSettings();
       if (!apiKey) {
         // Manual builds are gated behind the key-setup screen and auto-builds
         // require a key, so this only happens if the key was removed.
@@ -171,11 +171,47 @@ export class BuildManager {
         ? await extensionStore.get<string>(KEYS.activeSessionId)
         : undefined;
 
+      let githubInbox: GitHubInbox | undefined;
+      if (githubOwner.trim()) {
+        if (resumeSessionId) {
+          // The single-flight build keeps its input in the visible snapshot. Keep
+          // it through missing-key/setup failures while activeSessionId survives.
+          const saved = await extensionStore.get<GitHubInboxState>(KEYS.githubInbox);
+          if (saved?.sessionId === resumeSessionId && saved.inbox?.owner === githubOwner.trim()) githubInbox = saved.inbox;
+        } else {
+          const previous = await extensionStore.get<GitHubInboxState>(KEYS.githubInbox);
+          try {
+            this.onLog("Reading incoming GitHub issues and PRs (including Dependabot).");
+            githubInbox = await fetchGitHubInbox({ owner: githubOwner, token: githubToken, previous: previous?.inbox, signal: this.controller.signal });
+            // Publish new evidence immediately, keeping summaries only where
+            // their evidence is unchanged. A failed AI build cannot erase them.
+            await extensionStore.set(KEYS.githubInbox, reconcileGitHubInbox(githubInbox, previous));
+          } catch (error) {
+            if (this.controller.signal.aborted) throw error;
+            const message = error instanceof Error ? error.message : "GitHub refresh failed.";
+            const sameOwner = previous?.inbox?.owner === githubOwner.trim();
+            await extensionStore.set(KEYS.githubInbox, { inbox: sameOwner ? previous?.inbox : undefined, summaries: sameOwner ? previous?.summaries ?? [] : [], error: message } satisfies GitHubInboxState);
+            this.onLog(message);
+          }
+        }
+      }
+
       const result = await runHomepageBuild({
         client,
         bridge: browserBridge,
-        store: extensionStore,
+        store: {
+          ...extensionStore,
+          set: async (key, value) => {
+            // Associate evidence before publishing the resumable session handle.
+            if (key === KEYS.activeSessionId && githubInbox) {
+              const current = await extensionStore.get<GitHubInboxState>(KEYS.githubInbox);
+              await extensionStore.set(KEYS.githubInbox, { ...current, inbox: githubInbox, summaries: current?.summaries ?? [], sessionId: value as string } satisfies GitHubInboxState);
+            }
+            await extensionStore.set(key, value);
+          },
+        },
         userSystemPrompt: systemPrompt,
+        githubInbox,
         blockedSites: async () => (await loadSettings()).blockedSites,
         model,
         resumeSessionId,
@@ -189,6 +225,10 @@ export class BuildManager {
 
       // Persist the raw TSX; the page transpiles it for preview.
       await saveHomepage(result.code);
+      if (githubInbox) {
+        const current = await extensionStore.get<GitHubInboxState>(KEYS.githubInbox);
+        await extensionStore.set(KEYS.githubInbox, reconcileGitHubInbox(githubInbox, current, result.githubSummaries));
+      }
 
       this.state = { ...this.state, running: false, phase: "done" };
       this.broadcast({ kind: "done", code: result.code });

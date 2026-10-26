@@ -9,7 +9,7 @@
  * Run: pnpm agent:run
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { runHomepageBuild } from "@homepage/agent-core";
+import { fetchGitHubInbox, runHomepageBuild } from "@homepage/agent-core";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { FileKVStore, OUT_DIR, OUT_PATH, STATE_PATH, nodeBridge } from "./node-bridge";
 
@@ -25,11 +25,15 @@ async function main() {
   const started = Date.now();
   let lastPhase = "";
 
+  const githubInbox = process.env.GITHUB_OWNER
+    ? await fetchGitHubInbox({ owner: process.env.GITHUB_OWNER, token: process.env.GITHUB_TOKEN })
+    : undefined;
   const result = await runHomepageBuild({
     client,
     bridge: nodeBridge,
     store,
     userSystemPrompt: process.env.HOMEPAGE_PROMPT,
+    githubInbox,
     callbacks: {
       onPhase: (phase, detail) => {
         if (phase !== lastPhase) {
@@ -44,6 +48,11 @@ async function main() {
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   writeFileSync(OUT_PATH, result.code);
+  if (githubInbox) {
+    writeFileSync(`${OUT_DIR}/github-snapshot.json`, JSON.stringify(githubInbox, null, 2));
+    writeFileSync(`${OUT_DIR}/github-summaries.json`, JSON.stringify(result.githubSummaries, null, 2));
+    if (result.githubSummaries?.length !== githubInbox.items.length) throw new Error(`Incomplete AI summaries: ${result.githubSummaries?.length ?? 0}/${githubInbox.items.length}`);
+  }
 
   console.log("\n\n========== RESULT ==========");
   console.log(`session      : ${result.sessionId}`);

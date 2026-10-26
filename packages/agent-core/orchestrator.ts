@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { githubInstructions, parseGitHubSummaries, type GitHubInbox, type GitHubSummary } from "./github-inbox";
 import { buildHistoryDigest, slugifyUrl } from "./history-digest";
 import { OUTPUT_PATH, buildKickoffMessage } from "./prompt";
 import { DEFAULT_BLOCKED_SITES, isAllowedUrl, isBlocked, isPrivateAddress, normalizeBlockList } from "./site-filter";
@@ -38,6 +39,7 @@ export interface RunOptions {
   bridge: BrowserBridge;
   store: KVStore;
   userSystemPrompt?: string;
+  githubInbox?: GitHubInbox;
   /**
    * Hosts the tools must never read. A getter is re-read before every tool call,
    * so a list saved mid-build applies to the rest of that build.
@@ -224,7 +226,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
                   text: buildKickoffMessage({
                     now: opts.now ?? new Date(),
                     userSystemPrompt: opts.userSystemPrompt,
-                  }),
+                  }) + (opts.githubInbox ? "\n\n" + githubInstructions(opts.githubInbox) : ""),
                 },
               ],
             },
@@ -279,8 +281,11 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
 
     emit.phase("writing");
     const code = await collectDeliverable(client, sessionId, finalMessage, emit);
+    const githubSummaries = opts.githubInbox
+      ? await collectGitHubSummaries(client, sessionId, opts.githubInbox, emit)
+      : undefined;
     emit.phase("done");
-    return { code: code.code, sessionId, source: code.source };
+    return { code: code.code, sessionId, source: code.source, githubSummaries };
   } finally {
     // Privacy: the event log holds every domain, title and page body we sent,
     // and uploads persist independently of the session. Delete both, always.
@@ -416,6 +421,23 @@ async function runGetPageHtml(
 // ---------------------------------------------------------------------------
 // deliverable retrieval
 // ---------------------------------------------------------------------------
+
+async function collectGitHubSummaries(client: Anthropic, sessionId: string, inbox: GitHubInbox, emit: Emit): Promise<GitHubSummary[]> {
+  // agent-default (not a user rule): 2026-10-26. Match the existing output indexing retry window.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      for await (const file of client.beta.files.list({ scope_id: sessionId, betas: [MANAGED_AGENTS_BETA] })) {
+        if (file.filename.split("/").pop() !== "github-inbox.json") continue;
+        return parseGitHubSummaries(await (await client.beta.files.download(file.id)).text(), inbox);
+      }
+    } catch (err) {
+      emit.log(`GitHub summaries unavailable: ${String(err)}`);
+    }
+    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+  }
+  emit.log("No valid GitHub summaries; raw items remain visible for manual triage.");
+  return [];
+}
 
 const CODE_FENCE = /```(?:tsx|jsx|ts|js|typescript|javascript)?\s*\n([\s\S]*?)```/;
 

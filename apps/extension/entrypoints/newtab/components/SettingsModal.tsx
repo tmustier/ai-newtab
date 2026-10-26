@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MODEL_CHOICES, normalizeBlockList, type HomepageModel } from "@homepage/agent-core";
 import { btn } from "./ui";
 
 export function SettingsModal({
   initialPrompt,
+  githubOwner,
+  githubToken,
   blockedSites,
   model,
   onChangeModel,
@@ -13,15 +15,20 @@ export function SettingsModal({
   onSave,
 }: {
   initialPrompt: string;
+  githubOwner: string;
+  githubToken: string;
   blockedSites: string[];
   model: HomepageModel;
   onChangeModel: (next: HomepageModel) => void;
   autoRebuild: boolean;
   onToggleAutoRebuild: (next: boolean) => void;
   onClose: () => void;
-  onSave: (prompt: string, blockedSites: string[]) => void;
+  onSave: (prompt: string, blockedSites: string[], githubOwner: string, githubToken: string) => void;
 }) {
   const [draft, setDraft] = useState(initialPrompt);
+  const [ownerDraft, setOwnerDraft] = useState(githubOwner);
+  const [tokenDraft, setTokenDraft] = useState(githubToken);
+  useEffect(() => { setOwnerDraft(githubOwner); setTokenDraft(githubToken); }, [githubOwner, githubToken]);
   const [blockedDraft, setBlockedDraft] = useState(blockedSites.join("\n"));
 
   return (
@@ -54,6 +61,16 @@ export function SettingsModal({
             fontFamily: "inherit",
           }}
         />
+        <fieldset style={{ margin: "16px 0", border: "1px solid #ddd", borderRadius: 6, padding: 12 }}>
+          <legend>GitHub projects</legend>
+          <label style={{ display: "block" }}>GitHub username
+            <input aria-label="GitHub username" value={ownerDraft} onChange={e => setOwnerDraft(e.target.value)} placeholder="Leave blank to disable" style={{ width: "100%", boxSizing: "border-box", margin: "6px 0 12px", padding: 8 }} />
+          </label>
+          <label style={{ display: "block" }}>GitHub token (optional)
+            <input aria-label="GitHub token (optional)" type="password" autoComplete="off" value={tokenDraft} onChange={e => setTokenDraft(e.target.value)} style={{ width: "100%", boxSizing: "border-box", marginTop: 6, padding: 8 }} />
+          </label>
+          <p style={{ fontSize: 12, color: "#666", lineHeight: 1.5 }}>Includes incoming issues and PRs on public repositories, including Dependabot. A read-only token avoids GitHub\'s low anonymous rate limit. Public read access is enough; do not grant write access. Stored only in this browser, never sent to the AI. Public issue text and discussion are sent to your selected model for summaries. Leave the username blank to disable.</p>
+        </fieldset>
         <label style={{ display: "block", marginTop: 16, color: "#333", fontSize: 14 }}>
           Sites the agent never reads
           <textarea
@@ -111,7 +128,7 @@ export function SettingsModal({
           >
             Cancel
           </button>
-          <button onClick={() => onSave(draft, normalizeBlockList(blockedDraft.split("\n")))} style={btn}>
+          <button disabled={Boolean(ownerDraft.trim()) && !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(ownerDraft.trim())} onClick={() => onSave(draft, normalizeBlockList(blockedDraft.split("\n")), ownerDraft.trim(), tokenDraft.trim())} style={btn}>
             Save &amp; rebuild
           </button>
         </div>

@@ -16,6 +16,9 @@ import {
 export const KEYS = {
   ...AGENT_KEYS,
   homepage: "homepageData",
+  githubOwner: "githubOwner",
+  githubToken: "githubToken",
+  githubInbox: "githubInbox",
   systemPrompt: "systemPrompt",
   blockedSites: "blockedSites",
   model: "model",
@@ -35,6 +38,8 @@ export interface Homepage {
 
 export interface Settings {
   apiKey: string | null;
+  githubOwner: string;
+  githubToken: string;
   systemPrompt: string;
   blockedSites: string[];
   model: HomepageModel;
@@ -59,6 +64,8 @@ export const extensionStore: KVStore = {
 export async function loadSettings(): Promise<Settings> {
   const s = await browser.storage.local.get([
     KEYS.apiKey,
+    KEYS.githubOwner,
+    KEYS.githubToken,
     KEYS.systemPrompt,
     KEYS.blockedSites,
     KEYS.model,
@@ -67,6 +74,9 @@ export async function loadSettings(): Promise<Settings> {
   const model = s[KEYS.model] as string | undefined;
   return {
     apiKey: (s[KEYS.apiKey] as string | undefined) ?? null,
+    // This personal build follows Thomas's public repositories; blank disables it.
+    githubOwner: (s[KEYS.githubOwner] as string | undefined) ?? "tmustier",
+    githubToken: (s[KEYS.githubToken] as string | undefined) ?? "",
     systemPrompt: (s[KEYS.systemPrompt] as string | undefined) ?? "",
     blockedSites: (s[KEYS.blockedSites] as string[] | undefined) ?? [...DEFAULT_BLOCKED_SITES],
     // Fall back if a stored model is no longer offered.
@@ -75,7 +85,7 @@ export async function loadSettings(): Promise<Settings> {
   };
 }
 
-export async function saveSetting<K extends "apiKey" | "systemPrompt" | "blockedSites" | "model" | "autoRebuild">(
+export async function saveSetting<K extends "apiKey" | "githubOwner" | "githubToken" | "systemPrompt" | "blockedSites" | "model" | "autoRebuild">(
   key: K,
   value: Settings[K],
 ): Promise<void> {

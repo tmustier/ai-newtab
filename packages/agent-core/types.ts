@@ -112,6 +112,7 @@ export interface RunCallbacks {
 }
 
 export interface HomepageBuildResult {
+  githubSummaries?: import("./github-inbox").GitHubSummary[];
   code: string;
   sessionId: string;
   /** Where the code came from: a session output file, or a fenced block in the final message. */

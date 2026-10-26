@@ -1,3 +1,4 @@
+export * from "./github-inbox";
 export * from "./types";
 export * from "./schemas";
 export * from "./history-digest";

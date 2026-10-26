@@ -61,6 +61,36 @@ The finished component renders inside a Sandpack iframe
 (`entrypoints/newtab/components/HomepagePreview.tsx`): it is model-written code, so
 it runs sandboxed, not in the extension's own page.
 
+### GitHub inbox
+
+Before a new build, the worker reads incoming public issues and PRs from the
+GitHub REST API. It paginates search, comments, reviews and check runs. It excludes
+the owner's submissions but includes bots. Searches that are incomplete or exceed
+GitHub's 1,000-result limit fail without replacing the previous snapshot.
+
+The worker saves the snapshot in `githubInbox`, then adds the public evidence to
+the agent's kickoff message. The agent writes `github-inbox.json` beside
+`homepage.tsx`. The host accepts summaries only for current item URLs and known
+status groups. Items with incomplete evidence always need manual triage.
+
+The fixed React section renders outside the generated homepage iframe. It keeps
+all open item identities even if the agent returns missing or invalid summaries.
+Unchanged evidence keeps its previous summary until a replacement arrives.
+Changed evidence discards the old summary. A failed GitHub refresh keeps the old
+snapshot with an explicit warning. Change detection compares discussion, review
+and CI evidence as well as timestamps.
+
+The input snapshot also records the active session ID, so resuming uses the same
+evidence without storing a second copy. Missing-key or setup failures do not
+remove that snapshot. Only the worker writes snapshots; tabs subscribe to storage
+changes, including account changes made in another tab.
+
+Descriptions and recent discussion have configurable code-level limits. The
+aggregate input budget is 300,000 UTF-8 bytes (agent default, not requested).
+Larger evidence is shortened without dropping item identities and is flagged for
+manual triage. If the identities alone exceed the budget, the refresh fails and
+keeps the previous snapshot. Larger accounts would need batched summarisation.
+
 ## Layout
 
 ```
@@ -137,6 +167,13 @@ arrived in the history fetch.
 **`files.upload()` takes no `purpose`.** Just `{ file }`.
 
 ## Privacy
+
+The optional GitHub token is kept in local browser storage and sent only to
+`api.github.com`, never to the model. Public issue text, recent comments, reviews
+and check results are sent to the selected Anthropic model as untrusted data.
+The GitHub reader makes GET requests only and does not use notification read
+state. Its explicit username setting is separate from the browsing-site filter.
+
 
 The editable blocked-sites list is enforced in agent-core's tool handlers, not
 just the prompt: blocked domains are excluded from history digests and their

@@ -15,7 +15,7 @@
  * Set CHROME_PATH if Chrome isn't at the default macOS location.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -267,6 +267,21 @@ try {
   await page.evaluate(`chrome.storage.local.set({githubOwner:""})`);
   await sleep(200);
   check("account changes in storage hide the section and update open settings", await page.evaluate<boolean>(`!document.querySelector('.github-section') && document.querySelector('input[aria-label="GitHub username"]').value === ""`));
+
+  // Optionally render persisted results from a real build, without copying credentials.
+  if (process.env.LIVE_HOMEPAGE_PATH && process.env.LIVE_GITHUB_PATH) {
+    const code = readFileSync(process.env.LIVE_HOMEPAGE_PATH, "utf8");
+    const live = JSON.parse(readFileSync(process.env.LIVE_GITHUB_PATH, "utf8"));
+    await page.evaluate(`chrome.storage.local.set(${JSON.stringify({ githubOwner: live.inbox.owner, githubInbox: live, homepageData: { code, timestamp: new Date().toISOString() } })})`);
+    await page.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await page.send("Page.reload");
+    await sleep(8000);
+    await page.evaluate(`document.querySelector('[title="Dismiss"]')?.click()`);
+    check("live build summaries render without missing-item fallbacks", await page.evaluate<boolean>(`document.querySelector('.github-section').innerText.includes('All open ${live.inbox.items.length}') && !document.querySelector('.github-section').innerText.includes('AI summary unavailable')`));
+    await shot("github-live-desktop.png");
+    const liveBox = await page.evaluate<object>("(() => {const r=document.querySelector('.github-section').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scale:1}})()");
+    await shot("github-live-section.png", liveBox);
+  }
 
   page.close();
   browser.close();

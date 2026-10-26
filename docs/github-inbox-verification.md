@@ -4,14 +4,21 @@ Last verified: 2026-10-26
 
 ## Status
 
-Implementation and supporting checks pass. Live AI behaviour is not yet accepted.
-The Anthropic API key used by the installed extension is not available to the
-isolated harness. No everyday Chrome extension was replaced or reloaded.
+Implementation, supporting checks and the live AI build pass. The extension is
+installed at its existing unpacked path, with its settings and API key preserved.
+The user approved installation and the live build after the initial harness run.
+
+The installed reader hit GitHub's anonymous rate limit. Every incoming item was
+still listed and summarised, but 23 items had incomplete discussion/check context.
+Those items were kept in manual triage with an explicit warning. Adding a public
+read-only GitHub token in Settings is still recommended.
 
 ## Tested revision
 
-Code revision: `6735d034e41ba83b8479bad8506a4915c2308724`.
-Upstream base: `dfb8192`, including the daily morning rebuild schedule.
+Runtime code revision: `6735d034e41ba83b8479bad8506a4915c2308724`.
+Installed revision: `7a24551`, which adds the initial verification report without
+changing runtime code. Upstream base: `dfb8192`, including the daily morning
+rebuild schedule.
 
 The final code revision passed:
 
@@ -52,31 +59,61 @@ Screenshots use explicit UI fixtures, not claimed model output. They are saved i
 the ignored `harness/out/` directory as `github-desktop.png`,
 `github-section.png`, `github-laptop.png` and `github-settings.png`.
 
-## Model verification still needed
+## Live model verification
 
-Intended provider: Anthropic Managed Agents.
-Default configured model: `claude-sonnet-5-5`; the extension keeps the user's
-selected model. The code does not set a thinking level.
+The initial standalone harness attempt stopped because `ANTHROPIC_API_KEY` was
+unavailable. After installation approval, the real build was run in the installed
+extension using its existing key. No key was exported or copied to the harness.
+A temporary extension-local script and Chrome Apple Events controlled the test
+in an unfocused window. No debugger was attached to everyday Chrome.
 
-The prompt is the existing homepage kickoff plus `githubInstructions(inbox)` in
+The provider's agent API independently returned:
+
+- provider: Anthropic Managed Agents
+- model: `claude-sonnet-5-5`
+- effort: high
+- speed: standard
+
+The prompt was the normal homepage kickoff plus `githubInstructions(inbox)` in
 `packages/agent-core/github-inbox.ts`. It asks the agent to keep the normal
 homepage and use its actual `write` tool to produce `github-inbox.json` with an
 explanation, next action and status for every incoming item.
 
-`GITHUB_OWNER=tmustier pnpm agent:run` stopped before making a model request
-because `ANTHROPIC_API_KEY` was unavailable. No actual model tool execution was
-observed. The mocked orchestrator test verifies prompt delivery, history-tool
-dispatch, JSON collection, URL validation and collection before session cleanup,
-but it does not replace a live model run.
+The real model called the history and browser-page tools. Eight pages were
+mounted, followed by eight sandbox `read` calls, three `write` calls and four
+`edit` calls in the retained trace. The build completed at 13:20:48 UTC and saved
+a new homepage and 41 validated summaries for 41 incoming items, including 13 bot
+submissions. There were 40 items needing the owner and one waiting on others.
 
-To complete acceptance, run the harness with the real key supplied privately, or
-run an approved rebuild in the installed extension. Verify every input URL has a
-valid summary, inspect the suggested actions against source discussion and CI,
-and confirm persistence after opening another tab. The real model resume path,
-summary quality and production-browser installation remain untested.
+Independent assertions confirmed that input and summary URLs matched exactly,
+with no duplicates or omissions. All 23 items with incomplete evidence were kept
+in manual triage. A separate GitHub API query matched all 41 incoming URLs.
+Selected explanations and actions were checked against source descriptions,
+discussion and CI, including Windows support and dependency updates. The
+suggestions distinguished observed check state from unverified exposure or
+mergeability.
+
+Opening another real new tab showed the same 41 items and summaries, with the
+usual homepage below the inbox. The generated homepage passed `pnpm agent:verify`:
+it transformed, exported the component, rendered to HTML and contained 81 distinct
+external links with no placeholders. Its persisted output and GitHub summaries
+were also rendered in the disposable Chrome profile using the optional
+`LIVE_HOMEPAGE_PATH` and `LIVE_GITHUB_PATH` inputs to `pnpm extension:test`.
+The resulting viewport and section screenshots were reviewed. Actual homepage
+content remains local in ignored artifacts and is not published in this fork.
+
+The provider returned 404 when the completed session was independently queried,
+confirming session deletion. A real interrupted-model resume and a complete
+production-browser run with an authenticated GitHub token remain untested.
+The authenticated reader itself passed the earlier live API verification.
 
 ## Cleanup
 
 The disposable browser was stopped and its temporary profile removed by the
-harness. The Surf inspection window was closed. No repository contribution was
-sent upstream, and the branch has not been pushed.
+harness. The temporary extension verification script and the owned inspection
+window were removed after testing. No contribution was sent to Thariq's
+repository. The changes are pushed to the user's GitHub fork at
+<https://github.com/tmustier/ai-newtab>.
+
+The normal local checkout now tracks the fork as `origin`; Thariq's repository
+is retained as `upstream`.
